@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>하트 메모리 게임</title>
+<style>
+  :root {
+    --pink: #ff6fa5;
+    --orange: #ff9248;
+    --red: #e63946;
+    --ink: #4a2b3a;
+    --bg: #fff6ef;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    font-family: "Segoe UI", -apple-system, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+    background: radial-gradient(ellipse at 50% 0%, #ffe3ec 0%, var(--bg) 60%);
+    color: var(--ink);
+    display: flex; flex-direction: column; align-items: center;
+    padding: 32px 16px 48px;
+  }
+  h1 { font-size: 34px; letter-spacing: -0.02em; margin-bottom: 20px; }
+  h1 span { color: var(--red); }
+
+  .bar { display: flex; gap: 14px; align-items: center; margin-bottom: 28px; flex-wrap: wrap; justify-content: center; }
+  .stat {
+    background: #fff; border-radius: 999px; padding: 10px 22px;
+    box-shadow: 0 6px 18px rgba(230, 57, 70, .12);
+    font-weight: 600; font-size: 16px;
+  }
+  .stat b { font-size: 22px; color: var(--red); display: inline-block; min-width: 2ch; text-align: right; }
+  .stat b.pop { animation: pop .45s ease; }
+  @keyframes pop { 0% { transform: scale(1); } 40% { transform: scale(1.6); } 100% { transform: scale(1); } }
+  button.restart {
+    border: 0; cursor: pointer; font: inherit; font-weight: 700; color: #fff;
+    background: linear-gradient(135deg, var(--pink), var(--red));
+    padding: 12px 26px; border-radius: 999px;
+    box-shadow: 0 8px 20px rgba(230, 57, 70, .3);
+    transition: transform .2s;
+  }
+  button.restart:hover { transform: translateY(-2px); }
+
+  .board {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px;
+    width: min(100%, 520px);
+  }
+  .card { aspect-ratio: 100 / 90; perspective: 700px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .inner { position: relative; width: 100%; height: 100%; transition: transform .5s; transform-style: preserve-3d; }
+  .card.flipped .inner, .card.matched .inner { transform: rotateY(180deg); }
+  .face { position: absolute; inset: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+  .face svg { width: 100%; height: 100%; display: block; overflow: visible; filter: drop-shadow(0 6px 8px rgba(120, 30, 50, .22)); }
+  .front { transform: rotateY(180deg); }
+  .front .emoji {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: clamp(26px, 8vw, 44px); padding-bottom: 6%;
+  }
+  .card.matched .front svg { animation: glow .8s ease; }
+  @keyframes glow { 0% { transform: scale(1); } 40% { transform: scale(1.14); } 100% { transform: scale(1); } }
+  .card:not(.flipped):not(.matched):hover .inner { transform: translateY(-4px); }
+
+  .win {
+    margin-top: 28px; font-size: 26px; font-weight: 800; color: var(--red);
+    opacity: 0; transform: scale(.8); transition: all .4s; height: 36px;
+  }
+  .win.show { opacity: 1; transform: scale(1); }
+
+  canvas#fx { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+</style>
+</head>
+<body>
+  <h1>하트 <span>♥</span> 메모리 게임</h1>
+  <div class="bar">
+    <div class="stat">점수 <b id="score">0</b></div>
+    <div class="stat">시도 <b id="tries">0</b></div>
+    <button class="restart" id="restart">다시 하기</button>
+  </div>
+  <div class="board" id="board"></div>
+  <div class="win" id="win">🎉 모두 맞췄어요! 완성! 🎉</div>
+  <canvas id="fx"></canvas>
+
+<script>
+(function () {
+  var EMOJIS = ['🍓', '🍒', '🌸', '🦋', '🍑', '🎀', '🐙', '🍉'];
+  var COLORS = ['#ff6fa5', '#ff9248', '#e63946'];
+  var CONFETTI = ['#ff6fa5', '#ff9248', '#e63946', '#ffd166', '#ffffff'];
+  var HEART = 'M50 88 C20 62 2 44 2 26 C2 12 13 3 26 3 C36 3 45 9 50 18 C55 9 64 3 74 3 C87 3 98 12 98 26 C98 44 80 62 50 88 Z';
+
+  var board = document.getElementById('board');
+  var scoreEl = document.getElementById('score');
+  var triesEl = document.getElementById('tries');
+  var winEl = document.getElementById('win');
+  var canvas = document.getElementById('fx');
+  var ctx = canvas.getContext('2d');
+
+  var first = null, lock = false, score = 0, tries = 0, matchedCount = 0;
+
+  function shuffle(a) {
+    for (var i = a.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  }
+
+  function cardHTML(emoji, color, idx) {
+    var gid = 'g' + idx;
+    return '' +
+      '<div class="inner">' +
+        '<div class="face back"><svg viewBox="0 0 100 90">' +
+          '<defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="1" y2="1">' +
+          '<stop offset="0" stop-color="' + color + '"/><stop offset="1" stop-color="' + color + '" stop-opacity=".82"/>' +
+          '</linearGradient></defs>' +
+          '<path d="' + HEART + '" fill="url(#' + gid + ')"/>' +
+          '<path d="M50 62 C36 50 30 43 30 36 C30 31 34 28 38 28 C43 28 47 31 50 36 C53 31 57 28 62 28 C66 28 70 31 70 36 C70 43 64 50 50 62 Z" fill="rgba(255,255,255,.55)"/>' +
+        '</svg></div>' +
+        '<div class="face front"><svg viewBox="0 0 100 90">' +
+          '<path d="' + HEART + '" fill="#fffaf5" stroke="' + color + '" stroke-width="4"/>' +
+        '</svg><div class="emoji">' + emoji + '</div></div>' +
+      '</div>';
+  }
+
+  function newGame() {
+    board.innerHTML = '';
+    first = null; lock = false; score = 0; tries = 0; matchedCount = 0;
+    scoreEl.textContent = '0'; triesEl.textContent = '0';
+    winEl.classList.remove('show');
+    var deck = shuffle(EMOJIS.concat(EMOJIS));
+    deck.forEach(function (emoji, i) {
+      var el = document.createElement('div');
+      el.className = 'card';
+      el.dataset.emoji = emoji;
+      el.innerHTML = cardHTML(emoji, COLORS[i % 3], i);
+      el.addEventListener('click', function () { onFlip(el); });
+      board.appendChild(el);
+    });
+  }
+
+  function onFlip(el) {
+    if (lock || el.classList.contains('flipped') || el.classList.contains('matched')) return;
+    el.classList.add('flipped');
+    if (!first) { first = el; return; }
+    tries++; triesEl.textContent = tries;
+    var a = first, b = el;
+    first = null;
+    if (a.dataset.emoji === b.dataset.emoji) {
+      a.classList.add('matched'); b.classList.add('matched');
+      matchedCount += 2;
+      score += 10; scoreEl.textContent = score;
+      scoreEl.classList.remove('pop'); void scoreEl.offsetWidth; scoreEl.classList.add('pop');
+      burstAt(a, 40); burstAt(b, 40);
+      if (matchedCount === EMOJIS.length * 2) setTimeout(finale, 500);
+    } else {
+      lock = true;
+      setTimeout(function () {
+        a.classList.remove('flipped'); b.classList.remove('flipped');
+        lock = false;
+      }, 800);
+    }
+  }
+
+  /* ---- 폭죽 ---- */
+  var particles = [], running = false;
+  function resize() { canvas.width = innerWidth; canvas.height = innerHeight; }
+  addEventListener('resize', resize); resize();
+
+  function burst(x, y, n) {
+    for (var i = 0; i < n; i++) {
+      var ang = Math.random() * Math.PI * 2;
+      var sp = 2 + Math.random() * 6;
+      particles.push({
+        x: x, y: y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp - 1,
+        life: 0, max: 50 + Math.random() * 30,
+        size: 3 + Math.random() * 4,
+        color: CONFETTI[Math.floor(Math.random() * CONFETTI.length)]
+      });
+    }
+    if (!running) { running = true; requestAnimationFrame(tick); }
+  }
+  function burstAt(el, n) {
+    var r = el.getBoundingClientRect();
+    burst(r.left + r.width / 2, r.top + r.height / 2, n);
+  }
+  function tick() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    particles = particles.filter(function (p) { return p.life < p.max; });
+    particles.forEach(function (p) {
+      p.life++; p.vy += 0.12; p.vx *= 0.99;
+      p.x += p.vx; p.y += p.vy;
+      ctx.globalAlpha = 1 - p.life / p.max;
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+    if (particles.length) requestAnimationFrame(tick);
+    else { running = false; ctx.clearRect(0, 0, canvas.width, canvas.height); }
+  }
+  function finale() {
+    winEl.classList.add('show');
+    for (var i = 0; i < 8; i++) {
+      (function (k) {
+        setTimeout(function () {
+          burst(innerWidth * (0.15 + Math.random() * 0.7), innerHeight * (0.15 + Math.random() * 0.5), 70);
+        }, k * 250);
+      })(i);
+    }
+  }
+
+  document.getElementById('restart').addEventListener('click', newGame);
+  newGame();
+})();
+</script>
+</body>
+</html>
